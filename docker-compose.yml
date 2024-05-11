@@ -1,0 +1,21 @@
+version: '3.9'
+
+services:
+  parser_db:
+    extends:
+      file: docker-compose.base.yml
+      service: db
+  api:
+    extends:
+      file: docker-compose.base.yml
+      service: api
+    command: bash -c "
+      python manage.py migrate && python manage.py runserver
+      "
+
+volumes:
+  parser_db_volume:
+
+networks:
+  parser_db_network:
+  parser_redis_network:

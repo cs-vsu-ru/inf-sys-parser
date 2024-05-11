@@ -1,0 +1,7 @@
+[tool.black]
+skip-string-normalization = true
+
+[tool.isort]
+profile='black'
+atomic = true
+line_length = 88
