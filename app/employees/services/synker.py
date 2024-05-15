@@ -60,7 +60,7 @@ class EmployeeSynker:
         return f"{last_name} {first_name[0]}.{patronymic[0]}."
 
     def delete_lessons_by_id(self, id: int):
-        employees_data = self.get_filtered_employees_data()
+        employees_data = self.requester.get(self.url).json()
         for employee_data in employees_data:
             if employee_data['id'] == id:
                 self.lessons_manager.delete_for_employee()
