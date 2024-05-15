@@ -63,5 +63,7 @@ class EmployeeSynker:
         employees_data = self.requester.get(self.url).json()
         for employee_data in employees_data:
             if employee_data['id'] == id:
-                self.lessons_manager.delete_for_employee()
+                employee_to_delete = self.employee_manager.get(id=employee_data['id'])
+                self.lessons_manager.delete_for_employee(employee_to_delete)
+                employee_to_delete.delete()
         raise KeyError
