@@ -1,0 +1,36 @@
+name: Publish Docker Image to Registry
+
+on:
+  workflow_dispatch:
+  pull_request:
+    types:
+      - "closed"
+    branches:
+      - "master"
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+
+  publish:
+    runs-on: ubuntu-latest
+
+    if: ${{ github.event.pull_request.merged == true }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build . --build-arg GITHUB_REPO=${{ github.repository }} -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+
+      - name: Docker login
+        uses: docker/login-action@v1
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: cs-pr-development
+          password: ${{ secrets.TOKEN }}
+
+      - name: Push image
+        run: docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
