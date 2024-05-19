@@ -57,6 +57,9 @@ class LessonManager(Manager):
                     lessons_to_create.append(lesson)
         self.bulk_create(lessons_to_create)
 
+    def delete_for_employee(self, employee: Employee) -> None:
+        self.filter(employee=employee).delete()
+
     def index_lessons(
         self, lessons: list
     ) -> dict[tuple[Employee, Weekday, Number, bool], Lesson]:

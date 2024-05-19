@@ -11,7 +11,6 @@ IsCreated: TypeAlias = bool
 class EmployeeSynker:
     def __init__(self):
         self.url = 'http://api:8080/api/employees'
-        self.forbidden_words = ["инженер", "техник"]
         self.requester = requests
         self.employee_manager = Employee.objects
         self.lessons_manager = Lesson.objects
@@ -21,10 +20,7 @@ class EmployeeSynker:
         return [
             employee_data
             for employee_data in employees_data
-            if employee_data['post'] is None
-            or not any(
-                word in employee_data['post'].lower() for word in self.forbidden_words
-            )
+            if employee_data['has_lessons'] is True
         ]
 
     def synk(self) -> None:
@@ -62,3 +58,12 @@ class EmployeeSynker:
         last_name = employee_data['lastName']
         patronymic = employee_data['patronymic']
         return f"{last_name} {first_name[0]}.{patronymic[0]}."
+
+    def delete_lessons_by_id(self, id: int):
+        employees_data = self.requester.get(self.url).json()
+        for employee_data in employees_data:
+            if employee_data['id'] == id:
+                employee_to_delete = self.employee_manager.get(id=employee_data['id'])
+                self.lessons_manager.delete_for_employee(employee_to_delete)
+                employee_to_delete.delete()
+        raise KeyError
