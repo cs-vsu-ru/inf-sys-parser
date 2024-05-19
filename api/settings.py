@@ -128,11 +128,11 @@ SPECTACULAR_SETTINGS = {
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'db',
-        'USER': 'pg',
-        'PASSWORD': 'password',
-        'HOST': 'parser_db',
-        'PORT': '5432',
+        'NAME': 'parser_database',
+        'USER': 'inf-sys-parser',
+        'PASSWORD': os.environ.get('POSTGRES_PASSWORD'),
+        'HOST': os.environ.get('DB_HOST'),
+        'PORT': os.environ.get('DB_PORT'),
     }
 }
 

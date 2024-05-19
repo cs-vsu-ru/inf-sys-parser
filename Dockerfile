@@ -1,5 +1,8 @@
 FROM python:3.11.3
 
+ARG GITHUB_REPO
+LABEL org.opencontainers.image.source=https://github.com/${GITHUB_REPO}
+
 WORKDIR /api
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -8,8 +11,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 COPY /requirements.txt ./requirements.txt
 
-RUN pip install --upgrade pip \
-    pip install --upgrade setuptools \
+RUN pip install --upgrade pip && \
+    pip install --upgrade setuptools && \
     pip install -r requirements.txt
 
 COPY . .
+
+ENTRYPOINT python manage.py migrate && \
+    python manage.py collectstatic --noinput && \
+    gunicorn api.wsgi -c gunicorn/config.py
