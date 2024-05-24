@@ -99,7 +99,7 @@ SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
 # cache
 
-REDIS_URL = 'redis://parser_redis:6379/0'
+REDIS_URL = 'redis://redis:6379/0'
 
 CACHES = {
     'default': {
