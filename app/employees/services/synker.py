@@ -10,7 +10,7 @@ IsCreated: TypeAlias = bool
 
 class EmployeeSynker:
     def __init__(self):
-        self.url = 'http://api:8080/api/employees'
+        self.url = 'http://inf-sys-server:8080/api/employees'
         self.requester = requests
         self.employee_manager = Employee.objects
         self.lessons_manager = Lesson.objects
@@ -20,7 +20,7 @@ class EmployeeSynker:
         return [
             employee_data
             for employee_data in employees_data
-            if employee_data['has_lessons'] is True
+            if employee_data['hasLessons'] is True
         ]
 
     def synk(self) -> None:
