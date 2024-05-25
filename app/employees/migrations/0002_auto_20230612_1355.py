@@ -33,6 +33,7 @@ class Migration(migrations.Migration):
 
     dependencies = [
         ('employees', '0001_initial'),
+        ('lessons', '0001_initial')
     ]
 
     operations = [migrations.RunPython(delete_filtered_employees)]

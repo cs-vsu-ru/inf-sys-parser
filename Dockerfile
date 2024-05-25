@@ -17,6 +17,8 @@ RUN pip install --upgrade pip && \
 
 COPY . .
 
-ENTRYPOINT python manage.py migrate && \
-    python manage.py collectstatic --noinput && \
-    gunicorn api.wsgi -c gunicorn/config.py
+CMD ["sh", "-c", "python manage.py migrate && python manage.py collectstatic --noinput && gunicorn api.wsgi -c gunicorn/config.py && python manage.py runserver" ]
+
+#ENTRYPOINT python manage.py migrate && \
+#    python manage.py collectstatic --noinput && \
+#    gunicorn api.wsgi -c gunicorn/config.py
