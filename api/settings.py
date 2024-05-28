@@ -111,8 +111,8 @@ CACHES = {
 
 # static
 
-BASE_STATIC_URL = 'api/parser/static/'
-STATIC_URL = 'is/' + BASE_STATIC_URL
+BASE_STATIC_URL = 'api/static/'
+STATIC_URL = BASE_STATIC_URL
 STATIC_ROOT = BASE_DIR + 'static'
 
 # swagger
