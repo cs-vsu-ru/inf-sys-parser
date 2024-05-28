@@ -10,7 +10,7 @@ IsCreated: TypeAlias = bool
 
 class EmployeeSynker:
     def __init__(self):
-        self.url = 'http://inf-sys-server:8080/api/employees'
+        self.url = 'https://cs.vsu.ru/is/inf-sys-parser/api/employees'
         self.requester = requests
         self.employee_manager = Employee.objects
         self.lessons_manager = Lesson.objects
