@@ -26,7 +26,7 @@ class EmployeeSynker:
 
     def synk(self) -> None:
         self.employee_manager.all().delete()
-        employees_data = self.requester.get(self.url).json()
+        employees_data = self.get_filtered_employees_data()
         for employee_data in employees_data:
             name = self._parse_name(employee_data)
             self._update_or_create_employee(employee_data['id'], name)
