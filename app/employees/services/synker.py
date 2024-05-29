@@ -1,3 +1,4 @@
+import os
 from typing import TypeAlias, Any
 
 import requests
@@ -10,7 +11,7 @@ IsCreated: TypeAlias = bool
 
 class EmployeeSynker:
     def __init__(self):
-        self.url = 'https://cs.vsu.ru/is/inf-sys-parser/api/employees'
+        self.url = os.getenv('SERVER_URL') + 'api/employees'
         self.requester = requests
         self.employee_manager = Employee.objects
         self.lessons_manager = Lesson.objects
