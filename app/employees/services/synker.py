@@ -61,4 +61,3 @@ class EmployeeSynker:
         employee_to_delete = self.employee_manager.get(id=id)
         self.lessons_manager.delete_for_employee(employee_to_delete)
         employee_to_delete.delete()
-    raise KeyError
