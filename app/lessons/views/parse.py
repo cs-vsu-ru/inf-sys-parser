@@ -13,6 +13,10 @@ class LessonsParseView(BaseView):
 
     @response_204
     def post(self):
+        self.process()
+        self.process()
+
+    def process(self):
         employee_synker = EmployeeSynker()
         parser = Parser()
         self._upload_file()
