@@ -16,9 +16,35 @@ class Parser:
         self.fixer = CellsFixer()
         self.lesson_manager = Lesson.objects
         self.errors: list[dict[str, Any]] = []
+        self._cell_format_mismatch_count: int = 0
+        self._cell_format_mismatch_samples: list[dict[str, Any]] = []
+        # Limit on how many "unexpected cell format" examples we keep.
+        # Increase this when you need to inspect additional problematic cells.
+        self._cell_format_mismatch_samples_limit: int = 5000
+
+    def _excel_col_letters(self, col: int) -> str:
+        """
+        Converts 1-based column index to Excel letters.
+        Example: 1 -> A, 26 -> Z, 27 -> AA, 63 -> BK.
+        """
+        if col <= 0:
+            return ''
+        letters: list[str] = []
+        while col > 0:
+            col, rem = divmod(col - 1, 26)
+            letters.append(chr(ord('A') + rem))
+        letters.reverse()
+        return ''.join(letters)
+
+    def _excel_cell_ref(self, row: int | None, col: int | None) -> str | None:
+        if row is None or col is None:
+            return None
+        return f"{self._excel_col_letters(col)}{row}"
 
     def _reset_errors(self) -> None:
         self.errors = []
+        self._cell_format_mismatch_count = 0
+        self._cell_format_mismatch_samples = []
 
     def _add_error(
             self,
@@ -68,6 +94,21 @@ class Parser:
                 if not self._complete_row_lessons(row_lessons, row):
                     continue
                 lessons.extend(row_lessons)
+        if self._cell_format_mismatch_count:
+            # Вместо сотен однотипных ошибок по "не той структуре ячейки"
+            # возвращаем несколько примеров и общий счётчик.
+            if self._cell_format_mismatch_samples:
+                self.errors.extend(self._cell_format_mismatch_samples)
+            skipped = self._cell_format_mismatch_count - len(
+                self._cell_format_mismatch_samples
+            )
+            if skipped > 0:
+                self._add_error(
+                    row=None,
+                    col=None,
+                    field='cell_format_skipped',
+                    message=f'skipped {skipped} additional cells with unexpected format',
+                )
         return lessons
 
     def _prepare_data(self, filename: str) -> tuple:
@@ -95,8 +136,12 @@ class Parser:
         course_map = {}
         for column, course in enumerate(courses_row):
             if column > 1:
+                if course is None:
+                    continue
+                if isinstance(course, str) and not course.strip():
+                    continue
                 try:
-                    course_map[column] = self._extract_course_number(course)
+                    course_map[column] = self._extract_course_number(str(course))
                 except Exception as exc:
                     # строка с курсами — первая строка (индекс 0) соответствующего листа
                     self._add_error(
@@ -116,7 +161,7 @@ class Parser:
         for column, group in enumerate(groups_row):
             if column > 1:
                 try:
-                    group = group.strip()
+                    group = group.strip() if isinstance(group, str) else str(group)
                 except Exception as exc:
                     # строка с группами — вторая строка (индекс 1) соответствующего листа
                     self._add_error(
@@ -125,6 +170,8 @@ class Parser:
                         field='group',
                         message=f'cannot parse group value "{group}": {exc}',
                     )
+                    continue
+                if not group:
                     continue
                 if group == current_group:
                     current_subgroup = (current_subgroup or 0) + 1
@@ -167,18 +214,44 @@ class Parser:
         cells = []
         for column, cell_text in enumerate(row_list):
             if column > 1:
+                # Пропускаем заведомо "пустые" ячейки (в шаблоне иногда бывают пробелы/переводы строк)
+                if cell_text is None:
+                    continue
+                if isinstance(cell_text, str) and not cell_text.strip():
+                    continue
+                # Не пытаемся парсить колонки, которых нет в соответствующих мапах
+                if column not in course_map or column not in group_map:
+                    continue
                 if cell_text:
                     try:
                         cell = self._create_cell(
                             cell_text, row, column, course_map, group_map, sheet
                         )
+                    except ValueError as exc:
+                        # Чаще всего это "непохожий на занятие" контент (часть шаблона/пустоты).
+                        # Чтобы не раздувать ошибки, ограничиваем количество примеров.
+                        self._cell_format_mismatch_count += 1
+                        if len(self._cell_format_mismatch_samples) < self._cell_format_mismatch_samples_limit:
+                            cell_ref = self._excel_cell_ref(row + 1, column + 1)
+                            prefix = f'{cell_ref}: ' if cell_ref else ''
+                            self._cell_format_mismatch_samples.append(
+                                {
+                                    'row': row + 1,
+                                    'col': column + 1,
+                                    'field': 'cell',
+                                    'message': prefix + str(exc),
+                                }
+                            )
+                        continue
                     except Exception as exc:
-                        # ошибка в конкретной ячейке не должна прерывать обработку строки
+                        # Ошибка в конкретной ячейке не должна прерывать обработку строки
+                        cell_ref = self._excel_cell_ref(row + 1, column + 1)
+                        prefix = f'{cell_ref}: ' if cell_ref else ''
                         self._add_error(
                             row=row + 1,
                             col=column + 1,
                             field='cell',
-                            message=str(exc),
+                            message=prefix + (str(exc) or exc.__class__.__name__),
                         )
                         continue
                     cells.append(cell)
@@ -227,9 +300,13 @@ class Parser:
         return is_denominator
 
     def _parse_cell_text(self, cell_text: str) -> dict[str, str]:
+        if not isinstance(cell_text, str):
+            cell_text = str(cell_text)
         cell_text = re.sub(r'(\s|\n_){2,}', ' ', cell_text)
         if len(cell_text.split(' ')) < 5:
-            raise ValueError
+            raise ValueError(
+                f'unexpected cell format: expected >=5 parts, got {len(cell_text.split(" "))}'
+            )
         cell_text, placement = cell_text.rsplit(' ', 1)
         cell_text, _, surname, initials = cell_text.rsplit(' ', 3)
         employee_name = f"{surname} {initials}"
