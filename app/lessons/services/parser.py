@@ -2,6 +2,7 @@ import re
 from collections import defaultdict
 from typing import Any
 
+from app.base.logs import logger
 from app.lessons.entites.cell import CellEntity
 from app.lessons.models import Lesson
 from app.lessons.services.cells_fixer import CellsFixer
@@ -17,10 +18,10 @@ class Parser:
         self.lesson_manager = Lesson.objects
         self.errors: list[dict[str, Any]] = []
         self._cell_format_mismatch_count: int = 0
-        self._cell_format_mismatch_samples: list[dict[str, Any]] = []
-        # Limit on how many "unexpected cell format" examples we keep.
-        # Increase this when you need to inspect additional problematic cells.
-        self._cell_format_mismatch_samples_limit: int = 5000
+        self._cell_format_mismatch_by_message: dict[str, int] = defaultdict(int)
+        self._cell_format_mismatch_sample_by_message: dict[str, str] = {}
+        self._cell_format_mismatch_details: list[dict[str, Any]] = []
+        self._cell_format_mismatch_log_details_limit: int = 20000
 
     def _excel_col_letters(self, col: int) -> str:
         """
@@ -41,10 +42,25 @@ class Parser:
             return None
         return f"{self._excel_col_letters(col)}{row}"
 
+    def _cell_text_preview(self, cell_text: Any, limit: int = 120) -> str:
+        """
+        Creates a short, log-safe preview of Excel cell content.
+        """
+        try:
+            s = cell_text if isinstance(cell_text, str) else str(cell_text)
+        except Exception:
+            s = repr(cell_text)
+        s = re.sub(r'[\r\n\t]+', ' ', s).strip()
+        if len(s) > limit:
+            s = s[:limit] + '...'
+        return s
+
     def _reset_errors(self) -> None:
         self.errors = []
         self._cell_format_mismatch_count = 0
-        self._cell_format_mismatch_samples = []
+        self._cell_format_mismatch_by_message = defaultdict(int)
+        self._cell_format_mismatch_sample_by_message = {}
+        self._cell_format_mismatch_details = []
 
     def _add_error(
             self,
@@ -71,7 +87,6 @@ class Parser:
             if row > 3 and (row - 3) % 17:
                 cells: list[CellEntity] = []
                 for sheet in 0, 1:
-                    # для некоторых листов может не существовать строки с таким индексом
                     try:
                         row_list = data[sheet][row]
                     except IndexError:
@@ -95,20 +110,21 @@ class Parser:
                     continue
                 lessons.extend(row_lessons)
         if self._cell_format_mismatch_count:
-            # Вместо сотен однотипных ошибок по "не той структуре ячейки"
-            # возвращаем несколько примеров и общий счётчик.
-            if self._cell_format_mismatch_samples:
-                self.errors.extend(self._cell_format_mismatch_samples)
-            skipped = self._cell_format_mismatch_count - len(
-                self._cell_format_mismatch_samples
-            )
-            if skipped > 0:
+            for msg, count in self._cell_format_mismatch_by_message.items():
+                short_label = msg.split(':', 1)[0].strip() if ':' in msg else msg.strip()
+                sample = self._cell_format_mismatch_sample_by_message.get(msg, '')
+                sample_part = f' sample="{sample}"' if sample else ''
                 self._add_error(
                     row=None,
                     col=None,
                     field='cell_format_skipped',
-                    message=f'skipped {skipped} additional cells with unexpected format',
+                    message=f'{short_label} – {count} occurrences{sample_part}',
                 )
+            logger.info(
+                'Cell format mismatch details (%s total): %s',
+                self._cell_format_mismatch_count,
+                self._cell_format_mismatch_details,
+            )
         return lessons
 
     def _prepare_data(self, filename: str) -> tuple:
@@ -117,8 +133,6 @@ class Parser:
         group_map = []
         indexed_groups = []
         for sheet in 0, 1:
-            # индекс строки в списке данных 0-ориентированный, поэтому для отчёта по строкам
-            # переводим его в 1-ориентированный (как в Excel)
             data.append(self.xlsx_parser.parse(filename, sheet))
             course_map.append(self._map_courses(data[sheet][0], sheet))
             group_map.append(self._map_groups(data[sheet][1], sheet))
@@ -143,7 +157,6 @@ class Parser:
                 try:
                     course_map[column] = self._extract_course_number(str(course))
                 except Exception as exc:
-                    # строка с курсами — первая строка (индекс 0) соответствующего листа
                     self._add_error(
                         row=1,
                         col=column + 1,
@@ -163,7 +176,6 @@ class Parser:
                 try:
                     group = group.strip() if isinstance(group, str) else str(group)
                 except Exception as exc:
-                    # строка с группами — вторая строка (индекс 1) соответствующего листа
                     self._add_error(
                         row=2,
                         col=column + 1,
@@ -214,12 +226,10 @@ class Parser:
         cells = []
         for column, cell_text in enumerate(row_list):
             if column > 1:
-                # Пропускаем заведомо "пустые" ячейки (в шаблоне иногда бывают пробелы/переводы строк)
                 if cell_text is None:
                     continue
                 if isinstance(cell_text, str) and not cell_text.strip():
                     continue
-                # Не пытаемся парсить колонки, которых нет в соответствующих мапах
                 if column not in course_map or column not in group_map:
                     continue
                 if cell_text:
@@ -228,23 +238,27 @@ class Parser:
                             cell_text, row, column, course_map, group_map, sheet
                         )
                     except ValueError as exc:
-                        # Чаще всего это "непохожий на занятие" контент (часть шаблона/пустоты).
-                        # Чтобы не раздувать ошибки, ограничиваем количество примеров.
                         self._cell_format_mismatch_count += 1
-                        if len(self._cell_format_mismatch_samples) < self._cell_format_mismatch_samples_limit:
-                            cell_ref = self._excel_cell_ref(row + 1, column + 1)
-                            prefix = f'{cell_ref}: ' if cell_ref else ''
-                            self._cell_format_mismatch_samples.append(
-                                {
-                                    'row': row + 1,
-                                    'col': column + 1,
-                                    'field': 'cell',
-                                    'message': prefix + str(exc),
-                                }
+                        msg = str(exc)
+                        self._cell_format_mismatch_by_message[msg] += 1
+                        if msg not in self._cell_format_mismatch_sample_by_message:
+                            self._cell_format_mismatch_sample_by_message[msg] = (
+                                self._cell_text_preview(cell_text)
                             )
+                        cell_ref = self._excel_cell_ref(row + 1, column + 1)
+                        prefix = f'{cell_ref}: ' if cell_ref else ''
+                        preview = self._cell_format_mismatch_sample_by_message.get(msg, '')
+                        detail = {
+                            'row': row + 1,
+                            'col': column + 1,
+                            'field': 'cell',
+                            'message': prefix + msg,
+                            'cell_text': preview,
+                        }
+                        if len(self._cell_format_mismatch_details) < self._cell_format_mismatch_log_details_limit:
+                            self._cell_format_mismatch_details.append(detail)
                         continue
                     except Exception as exc:
-                        # Ошибка в конкретной ячейке не должна прерывать обработку строки
                         cell_ref = self._excel_cell_ref(row + 1, column + 1)
                         prefix = f'{cell_ref}: ' if cell_ref else ''
                         self._add_error(
@@ -323,7 +337,6 @@ class Parser:
             number = self._get_number(row)
             is_denominator = self._get_is_denominator(row)
         except Exception as exc:
-            # если не удалось определить общие параметры строки, пропускаем все занятия этой строки
             self._add_error(
                 row=row + 1,
                 col=None,
