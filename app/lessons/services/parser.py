@@ -1,10 +1,11 @@
-from collections import defaultdict
 import re
+from collections import defaultdict
+from typing import Any
 
 from app.lessons.entites.cell import CellEntity
 from app.lessons.models import Lesson
-from app.lessons.services.converters.cell import CellConverter
 from app.lessons.services.cells_fixer import CellsFixer
+from app.lessons.services.converters.cell import CellConverter
 from app.lessons.services.xlsx.parser import XlsxParser
 
 
@@ -14,15 +15,47 @@ class Parser:
         self.cell_converter = CellConverter()
         self.fixer = CellsFixer()
         self.lesson_manager = Lesson.objects
+        self.errors: list[dict[str, Any]] = []
+
+    def _reset_errors(self) -> None:
+        self.errors = []
+
+    def _add_error(
+            self,
+            *,
+            row: int | None,
+            col: int | None,
+            field: str,
+            message: str,
+    ) -> None:
+        self.errors.append(
+            {
+                'row': row,
+                'col': col,
+                'field': field,
+                'message': message,
+            }
+        )
 
     def parse(self, filename: str = 'schedule.xlsx') -> list[Lesson]:
-        lessons = []
+        self._reset_errors()
+        lessons: list[Lesson] = []
         data, course_map, group_map, indexed_groups = self._prepare_data(filename)
         for row in range(len(data[0])):
             if row > 3 and (row - 3) % 17:
-                cells = []
+                cells: list[CellEntity] = []
                 for sheet in 0, 1:
-                    row_list = data[sheet][row]
+                    # для некоторых листов может не существовать строки с таким индексом
+                    try:
+                        row_list = data[sheet][row]
+                    except IndexError:
+                        self._add_error(
+                            row=row + 1,
+                            col=None,
+                            field='row',
+                            message=f'row index {row} is out of range for sheet {sheet}',
+                        )
+                        continue
                     cells.extend(
                         self._create_cells(
                             row, row_list, course_map[sheet], group_map[sheet], sheet
@@ -32,7 +65,8 @@ class Parser:
                 row_lessons = self.cell_converter.convert_to_lessons(
                     cells_map, indexed_groups
                 )
-                self._complete_row_lessons(row_lessons, row)
+                if not self._complete_row_lessons(row_lessons, row):
+                    continue
                 lessons.extend(row_lessons)
         return lessons
 
@@ -42,9 +76,11 @@ class Parser:
         group_map = []
         indexed_groups = []
         for sheet in 0, 1:
+            # индекс строки в списке данных 0-ориентированный, поэтому для отчёта по строкам
+            # переводим его в 1-ориентированный (как в Excel)
             data.append(self.xlsx_parser.parse(filename, sheet))
-            course_map.append(self._map_courses(data[sheet][0]))
-            group_map.append(self._map_groups(data[sheet][1]))
+            course_map.append(self._map_courses(data[sheet][0], sheet))
+            group_map.append(self._map_groups(data[sheet][1], sheet))
             indexed_groups.append(
                 self._index_groups(course_map[sheet], group_map[sheet])
             )
@@ -53,22 +89,45 @@ class Parser:
     def _extract_course_number(self, course: str) -> int:
         return int(course.strip().split()[0])
 
-    def _map_courses(self, courses_row: list[str]) -> dict[int, int]:
+    def _map_courses(
+            self, courses_row: list[str], sheet: int
+    ) -> dict[int, int]:
         course_map = {}
         for column, course in enumerate(courses_row):
             if column > 1:
-                course_map[column] = self._extract_course_number(course)
+                try:
+                    course_map[column] = self._extract_course_number(course)
+                except Exception as exc:
+                    # строка с курсами — первая строка (индекс 0) соответствующего листа
+                    self._add_error(
+                        row=1,
+                        col=column + 1,
+                        field='course',
+                        message=f'cannot parse course value "{course}": {exc}',
+                    )
         return course_map
 
-    def _map_groups(self, groups_row: list[str]) -> dict[int, tuple[str, int]]:
-        group_map = {}
-        current_group = None
-        current_subgroup = None
+    def _map_groups(
+            self, groups_row: list[str], sheet: int
+    ) -> dict[int, tuple[str, int]]:
+        group_map: dict[int, tuple[str, int]] = {}
+        current_group: str | None = None
+        current_subgroup: int | None = None
         for column, group in enumerate(groups_row):
             if column > 1:
-                group = group.strip()
+                try:
+                    group = group.strip()
+                except Exception as exc:
+                    # строка с группами — вторая строка (индекс 1) соответствующего листа
+                    self._add_error(
+                        row=2,
+                        col=column + 1,
+                        field='group',
+                        message=f'cannot parse group value "{group}": {exc}',
+                    )
+                    continue
                 if group == current_group:
-                    current_subgroup += 1
+                    current_subgroup = (current_subgroup or 0) + 1
                 else:
                     current_group = group
                     current_subgroup = 1
@@ -76,13 +135,22 @@ class Parser:
         return group_map
 
     def _index_groups(
-        self, course_map: dict[int, int], group_map: dict[int, tuple[str, int]]
+            self, course_map: dict[int, int], group_map: dict[int, tuple[str, int]]
     ) -> dict[int, dict[str, int]]:
         indexed_groups: dict[int, dict[str, int]] = defaultdict(dict)
         current_course = 1
         indexed_groups_on_course: dict[str, int] = defaultdict(int)
         for column, (group, subgroup) in group_map.items():
-            course = course_map[column]
+            try:
+                course = course_map[column]
+            except KeyError:
+                self._add_error(
+                    row=None,
+                    col=column + 1,
+                    field='course_map',
+                    message='course not mapped for group column',
+                )
+                continue
             if indexed_groups_on_course[group] < subgroup:
                 indexed_groups_on_course[group] = subgroup
             if current_course != course:
@@ -94,7 +162,7 @@ class Parser:
         return indexed_groups
 
     def _create_cells(
-        self, row: int, row_list, course_map, group_map, sheet
+            self, row: int, row_list, course_map, group_map, sheet
     ) -> list[CellEntity]:
         cells = []
         for column, cell_text in enumerate(row_list):
@@ -104,13 +172,20 @@ class Parser:
                         cell = self._create_cell(
                             cell_text, row, column, course_map, group_map, sheet
                         )
-                    except ValueError:
+                    except Exception as exc:
+                        # ошибка в конкретной ячейке не должна прерывать обработку строки
+                        self._add_error(
+                            row=row + 1,
+                            col=column + 1,
+                            field='cell',
+                            message=str(exc),
+                        )
                         continue
                     cells.append(cell)
         return cells
 
     def _create_cell(
-        self, cell_text: str, row, column, course_map, group_map, sheet
+            self, cell_text: str, row, column, course_map, group_map, sheet
     ) -> CellEntity:
         cell_data: dict = self._parse_cell_text(cell_text)
         group, subgroup = group_map[column]
@@ -166,10 +241,21 @@ class Parser:
         }
 
     def _complete_row_lessons(self, row_lessons: list[Lesson], row: int) -> None:
-        weekday = self._get_weekday(row)
-        number = self._get_number(row)
-        is_denominator = self._get_is_denominator(row)
+        try:
+            weekday = self._get_weekday(row)
+            number = self._get_number(row)
+            is_denominator = self._get_is_denominator(row)
+        except Exception as exc:
+            # если не удалось определить общие параметры строки, пропускаем все занятия этой строки
+            self._add_error(
+                row=row + 1,
+                col=None,
+                field='lesson_meta',
+                message=str(exc),
+            )
+            return False
         for row_lesson in row_lessons:
             row_lesson.weekday = weekday
             row_lesson.number = number
             row_lesson.is_denominator = is_denominator
+        return True
