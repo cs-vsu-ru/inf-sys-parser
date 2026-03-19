@@ -1,10 +1,12 @@
-from collections import defaultdict
 import re
+from collections import defaultdict
+from typing import Any
 
+from app.base.logs import logger
 from app.lessons.entites.cell import CellEntity
 from app.lessons.models import Lesson
-from app.lessons.services.converters.cell import CellConverter
 from app.lessons.services.cells_fixer import CellsFixer
+from app.lessons.services.converters.cell import CellConverter
 from app.lessons.services.xlsx.parser import XlsxParser
 
 
@@ -14,15 +16,87 @@ class Parser:
         self.cell_converter = CellConverter()
         self.fixer = CellsFixer()
         self.lesson_manager = Lesson.objects
+        self.errors: list[dict[str, Any]] = []
+        self._cell_format_mismatch_count: int = 0
+        self._cell_format_mismatch_by_message: dict[str, int] = defaultdict(int)
+        self._cell_format_mismatch_sample_by_message: dict[str, str] = {}
+        self._cell_format_mismatch_details: list[dict[str, Any]] = []
+        self._cell_format_mismatch_log_details_limit: int = 20000
+
+    def _excel_col_letters(self, col: int) -> str:
+        """
+        Converts 1-based column index to Excel letters.
+        Example: 1 -> A, 26 -> Z, 27 -> AA, 63 -> BK.
+        """
+        if col <= 0:
+            return ''
+        letters: list[str] = []
+        while col > 0:
+            col, rem = divmod(col - 1, 26)
+            letters.append(chr(ord('A') + rem))
+        letters.reverse()
+        return ''.join(letters)
+
+    def _excel_cell_ref(self, row: int | None, col: int | None) -> str | None:
+        if row is None or col is None:
+            return None
+        return f"{self._excel_col_letters(col)}{row}"
+
+    def _cell_text_preview(self, cell_text: Any, limit: int = 120) -> str:
+        """
+        Creates a short, log-safe preview of Excel cell content.
+        """
+        try:
+            s = cell_text if isinstance(cell_text, str) else str(cell_text)
+        except Exception:
+            s = repr(cell_text)
+        s = re.sub(r'[\r\n\t]+', ' ', s).strip()
+        if len(s) > limit:
+            s = s[:limit] + '...'
+        return s
+
+    def _reset_errors(self) -> None:
+        self.errors = []
+        self._cell_format_mismatch_count = 0
+        self._cell_format_mismatch_by_message = defaultdict(int)
+        self._cell_format_mismatch_sample_by_message = {}
+        self._cell_format_mismatch_details = []
+
+    def _add_error(
+            self,
+            *,
+            row: int | None,
+            col: int | None,
+            field: str,
+            message: str,
+    ) -> None:
+        self.errors.append(
+            {
+                'row': row,
+                'col': col,
+                'field': field,
+                'message': message,
+            }
+        )
 
     def parse(self, filename: str = 'schedule.xlsx') -> list[Lesson]:
-        lessons = []
+        self._reset_errors()
+        lessons: list[Lesson] = []
         data, course_map, group_map, indexed_groups = self._prepare_data(filename)
         for row in range(len(data[0])):
             if row > 3 and (row - 3) % 17:
-                cells = []
+                cells: list[CellEntity] = []
                 for sheet in 0, 1:
-                    row_list = data[sheet][row]
+                    try:
+                        row_list = data[sheet][row]
+                    except IndexError:
+                        self._add_error(
+                            row=row + 1,
+                            col=None,
+                            field='row',
+                            message=f'row index {row} is out of range for sheet {sheet}',
+                        )
+                        continue
                     cells.extend(
                         self._create_cells(
                             row, row_list, course_map[sheet], group_map[sheet], sheet
@@ -32,8 +106,25 @@ class Parser:
                 row_lessons = self.cell_converter.convert_to_lessons(
                     cells_map, indexed_groups
                 )
-                self._complete_row_lessons(row_lessons, row)
+                if not self._complete_row_lessons(row_lessons, row):
+                    continue
                 lessons.extend(row_lessons)
+        if self._cell_format_mismatch_count:
+            for msg, count in self._cell_format_mismatch_by_message.items():
+                short_label = msg.split(':', 1)[0].strip() if ':' in msg else msg.strip()
+                sample = self._cell_format_mismatch_sample_by_message.get(msg, '')
+                sample_part = f' sample="{sample}"' if sample else ''
+                self._add_error(
+                    row=None,
+                    col=None,
+                    field='cell_format_skipped',
+                    message=f'{short_label} – {count} occurrences{sample_part}',
+                )
+            logger.info(
+                'Cell format mismatch details (%s total): %s',
+                self._cell_format_mismatch_count,
+                self._cell_format_mismatch_details,
+            )
         return lessons
 
     def _prepare_data(self, filename: str) -> tuple:
@@ -43,8 +134,8 @@ class Parser:
         indexed_groups = []
         for sheet in 0, 1:
             data.append(self.xlsx_parser.parse(filename, sheet))
-            course_map.append(self._map_courses(data[sheet][0]))
-            group_map.append(self._map_groups(data[sheet][1]))
+            course_map.append(self._map_courses(data[sheet][0], sheet))
+            group_map.append(self._map_groups(data[sheet][1], sheet))
             indexed_groups.append(
                 self._index_groups(course_map[sheet], group_map[sheet])
             )
@@ -53,22 +144,49 @@ class Parser:
     def _extract_course_number(self, course: str) -> int:
         return int(course.strip().split()[0])
 
-    def _map_courses(self, courses_row: list[str]) -> dict[int, int]:
+    def _map_courses(
+            self, courses_row: list[str], sheet: int
+    ) -> dict[int, int]:
         course_map = {}
         for column, course in enumerate(courses_row):
             if column > 1:
-                course_map[column] = self._extract_course_number(course)
+                if course is None:
+                    continue
+                if isinstance(course, str) and not course.strip():
+                    continue
+                try:
+                    course_map[column] = self._extract_course_number(str(course))
+                except Exception as exc:
+                    self._add_error(
+                        row=1,
+                        col=column + 1,
+                        field='course',
+                        message=f'cannot parse course value "{course}": {exc}',
+                    )
         return course_map
 
-    def _map_groups(self, groups_row: list[str]) -> dict[int, tuple[str, int]]:
-        group_map = {}
-        current_group = None
-        current_subgroup = None
+    def _map_groups(
+            self, groups_row: list[str], sheet: int
+    ) -> dict[int, tuple[str, int]]:
+        group_map: dict[int, tuple[str, int]] = {}
+        current_group: str | None = None
+        current_subgroup: int | None = None
         for column, group in enumerate(groups_row):
             if column > 1:
-                group = group.strip()
+                try:
+                    group = group.strip() if isinstance(group, str) else str(group)
+                except Exception as exc:
+                    self._add_error(
+                        row=2,
+                        col=column + 1,
+                        field='group',
+                        message=f'cannot parse group value "{group}": {exc}',
+                    )
+                    continue
+                if not group:
+                    continue
                 if group == current_group:
-                    current_subgroup += 1
+                    current_subgroup = (current_subgroup or 0) + 1
                 else:
                     current_group = group
                     current_subgroup = 1
@@ -76,13 +194,22 @@ class Parser:
         return group_map
 
     def _index_groups(
-        self, course_map: dict[int, int], group_map: dict[int, tuple[str, int]]
+            self, course_map: dict[int, int], group_map: dict[int, tuple[str, int]]
     ) -> dict[int, dict[str, int]]:
         indexed_groups: dict[int, dict[str, int]] = defaultdict(dict)
         current_course = 1
         indexed_groups_on_course: dict[str, int] = defaultdict(int)
         for column, (group, subgroup) in group_map.items():
-            course = course_map[column]
+            try:
+                course = course_map[column]
+            except KeyError:
+                self._add_error(
+                    row=None,
+                    col=column + 1,
+                    field='course_map',
+                    message='course not mapped for group column',
+                )
+                continue
             if indexed_groups_on_course[group] < subgroup:
                 indexed_groups_on_course[group] = subgroup
             if current_course != course:
@@ -94,23 +221,58 @@ class Parser:
         return indexed_groups
 
     def _create_cells(
-        self, row: int, row_list, course_map, group_map, sheet
+            self, row: int, row_list, course_map, group_map, sheet
     ) -> list[CellEntity]:
         cells = []
         for column, cell_text in enumerate(row_list):
             if column > 1:
+                if cell_text is None:
+                    continue
+                if isinstance(cell_text, str) and not cell_text.strip():
+                    continue
+                if column not in course_map or column not in group_map:
+                    continue
                 if cell_text:
                     try:
                         cell = self._create_cell(
                             cell_text, row, column, course_map, group_map, sheet
                         )
-                    except ValueError:
+                    except ValueError as exc:
+                        self._cell_format_mismatch_count += 1
+                        msg = str(exc)
+                        self._cell_format_mismatch_by_message[msg] += 1
+                        if msg not in self._cell_format_mismatch_sample_by_message:
+                            self._cell_format_mismatch_sample_by_message[msg] = (
+                                self._cell_text_preview(cell_text)
+                            )
+                        cell_ref = self._excel_cell_ref(row + 1, column + 1)
+                        prefix = f'{cell_ref}: ' if cell_ref else ''
+                        preview = self._cell_format_mismatch_sample_by_message.get(msg, '')
+                        detail = {
+                            'row': row + 1,
+                            'col': column + 1,
+                            'field': 'cell',
+                            'message': prefix + msg,
+                            'cell_text': preview,
+                        }
+                        if len(self._cell_format_mismatch_details) < self._cell_format_mismatch_log_details_limit:
+                            self._cell_format_mismatch_details.append(detail)
+                        continue
+                    except Exception as exc:
+                        cell_ref = self._excel_cell_ref(row + 1, column + 1)
+                        prefix = f'{cell_ref}: ' if cell_ref else ''
+                        self._add_error(
+                            row=row + 1,
+                            col=column + 1,
+                            field='cell',
+                            message=prefix + (str(exc) or exc.__class__.__name__),
+                        )
                         continue
                     cells.append(cell)
         return cells
 
     def _create_cell(
-        self, cell_text: str, row, column, course_map, group_map, sheet
+            self, cell_text: str, row, column, course_map, group_map, sheet
     ) -> CellEntity:
         cell_data: dict = self._parse_cell_text(cell_text)
         group, subgroup = group_map[column]
@@ -152,9 +314,13 @@ class Parser:
         return is_denominator
 
     def _parse_cell_text(self, cell_text: str) -> dict[str, str]:
+        if not isinstance(cell_text, str):
+            cell_text = str(cell_text)
         cell_text = re.sub(r'(\s|\n_){2,}', ' ', cell_text)
         if len(cell_text.split(' ')) < 5:
-            raise ValueError
+            raise ValueError(
+                f'unexpected cell format: expected >=5 parts, got {len(cell_text.split(" "))}'
+            )
         cell_text, placement = cell_text.rsplit(' ', 1)
         cell_text, _, surname, initials = cell_text.rsplit(' ', 3)
         employee_name = f"{surname} {initials}"
@@ -166,10 +332,20 @@ class Parser:
         }
 
     def _complete_row_lessons(self, row_lessons: list[Lesson], row: int) -> None:
-        weekday = self._get_weekday(row)
-        number = self._get_number(row)
-        is_denominator = self._get_is_denominator(row)
+        try:
+            weekday = self._get_weekday(row)
+            number = self._get_number(row)
+            is_denominator = self._get_is_denominator(row)
+        except Exception as exc:
+            self._add_error(
+                row=row + 1,
+                col=None,
+                field='lesson_meta',
+                message=str(exc),
+            )
+            return False
         for row_lesson in row_lessons:
             row_lesson.weekday = weekday
             row_lesson.number = number
             row_lesson.is_denominator = is_denominator
+        return True
