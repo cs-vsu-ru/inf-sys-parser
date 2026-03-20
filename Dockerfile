@@ -11,9 +11,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 COPY requirements.txt ./requirements.txt
 
-RUN pip install --upgrade pip && \
-    pip install --upgrade setuptools && \
-    pip install -r requirements.txt
+RUN python -m pip install --upgrade pip && \
+    # Ensure setuptools/pkg_resources are installed in the final image.
+    python -m pip install --no-cache-dir --upgrade setuptools && \
+    python -m pip install --no-cache-dir -r requirements.txt
 
 # Fail fast if image doesn't contain setuptools/pkg_resources.
 RUN python -c "import pkg_resources; print('pkg_resources ok')"
