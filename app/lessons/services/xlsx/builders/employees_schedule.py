@@ -1,3 +1,4 @@
+from copy import copy
 from typing import TypeAlias
 
 from openpyxl import load_workbook
@@ -21,11 +22,12 @@ class XlsxEmployeesScheduleBuilder:
         wb = load_workbook(self.template_filename)
         ws = wb.active
         # Row 1: columns 0–1 are fixed; teacher names start at 0-based index 2 (Excel column C).
-        max_slots = max(0, ws.max_column - 2)
+        template_right_col = ws.max_column
+        max_slots = max(0, template_right_col - 2)
         extra = len(employees) - max_slots
         if extra > 0:
             # Template width is fixed; append columns so every employee gets a slot (avoids IndexError).
-            ws.insert_cols(ws.max_column + 1, extra)
+            ws.insert_cols(template_right_col + 1, extra)
         for index, employee in enumerate(employees):
             # 0-based offset in row tuples; Excel column index is 1-based (use cell(), not ws[row][i] —
             # after insert_cols, row tuples may still be too short and raise IndexError).
@@ -51,6 +53,14 @@ class XlsxEmployeesScheduleBuilder:
                             end_row=denominator_row,
                             end_column=col_1based,
                         )
+        if extra > 0:
+            # insert_cols adds blank cells without the template border; mirror last template column.
+            max_r = self._get_numerator_row(5, 7) + 1
+            for col in range(template_right_col + 1, template_right_col + extra + 1):
+                for row in range(1, max_r + 1):
+                    src = ws.cell(row=row, column=template_right_col)
+                    dst = ws.cell(row=row, column=col)
+                    dst.border = copy(src.border)
         wb.save(self.target_filename)
         return self.target_filename
 
