@@ -27,24 +27,29 @@ class XlsxEmployeesScheduleBuilder:
             # Template width is fixed; append columns so every employee gets a slot (avoids IndexError).
             ws.insert_cols(ws.max_column + 1, extra)
         for index, employee in enumerate(employees):
+            # 0-based offset in row tuples; Excel column index is 1-based (use cell(), not ws[row][i] —
+            # after insert_cols, row tuples may still be too short and raise IndexError).
             column = index + 2
-            ws[1][column].value = employee.name
+            col_1based = column + 1
+            ws.cell(row=1, column=col_1based).value = employee.name
             for weekday in range(6):
                 for number in range(8):
                     numerator_row = self._get_numerator_row(weekday, number)
                     denominator_row = numerator_row + 1
                     numerator_lesson = lessons[(employee, weekday, number, False)]
                     denominator_lesson = lessons[(employee, weekday, number, True)]
-                    ws[numerator_row][column].value = self._get_cell(numerator_lesson)
-                    ws[denominator_row][column].value = self._get_cell(
-                        denominator_lesson
+                    ws.cell(row=numerator_row, column=col_1based).value = (
+                        self._get_cell(numerator_lesson)
+                    )
+                    ws.cell(row=denominator_row, column=col_1based).value = (
+                        self._get_cell(denominator_lesson)
                     )
                     if self._check_merge(numerator_lesson, denominator_lesson):
                         ws.merge_cells(
                             start_row=numerator_row,
-                            start_column=column + 1,
+                            start_column=col_1based,
                             end_row=denominator_row,
-                            end_column=column + 1,
+                            end_column=col_1based,
                         )
         wb.save(self.target_filename)
         return self.target_filename
