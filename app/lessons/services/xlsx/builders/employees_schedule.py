@@ -16,10 +16,16 @@ class XlsxEmployeesScheduleBuilder:
         self.employees_manager = Employee.objects
 
     def build(self) -> TargetFilename:
-        employees = self.employees_manager.order_by('name')
+        employees = list(self.employees_manager.order_by('name'))
         lessons = self.lesson_manager.index_lessons(self.lesson_manager.all())
         wb = load_workbook(self.template_filename)
         ws = wb.active
+        # Row 1: columns 0–1 are fixed; teacher names start at 0-based index 2 (Excel column C).
+        max_slots = max(0, ws.max_column - 2)
+        extra = len(employees) - max_slots
+        if extra > 0:
+            # Template width is fixed; append columns so every employee gets a slot (avoids IndexError).
+            ws.insert_cols(ws.max_column + 1, extra)
         for index, employee in enumerate(employees):
             column = index + 2
             ws[1][column].value = employee.name
