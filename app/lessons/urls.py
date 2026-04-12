@@ -7,6 +7,7 @@ from app.lessons.views import (
     LessonView,
     LessonsByEmployeeXlsxView,
     LessonsXlsxView,
+    WeekConfigView,
 )
 
 urlpatterns = [
@@ -16,4 +17,5 @@ urlpatterns = [
     path('by_employee/<int:employee_id>/', LessonsByEmployeeView.as_view()),
     path('by_employee/<int:employee_id>/xlsx/', LessonsByEmployeeXlsxView.as_view()),
     path('parse/', LessonsParseView.as_view()),
+    path('week_config/', WeekConfigView.as_view()),
 ]
