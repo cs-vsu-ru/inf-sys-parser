@@ -1,8 +1,9 @@
-from datetime import date, timedelta
+from datetime import timedelta
 
 from django.core.cache import cache
 from rest_framework.response import Response
 
+from app.base.utils.common import moscow_today
 from app.base.views.base import BaseView
 from app.lessons.models import WeekConfig
 from app.lessons.serializers.week_config import GET_WeekConfigSerializer, PATCH_WeekConfigSerializer
@@ -17,7 +18,7 @@ class WeekConfigView(BaseView):
     def _get_or_default(self) -> WeekConfig:
         config = WeekConfig.objects.first()
         if config is None:
-            today = date.today()
+            today = moscow_today()
             config = WeekConfig(
                 reference_date=today - timedelta(days=today.weekday()),
                 is_denominator=today.isocalendar()[1] % 2 == 0,

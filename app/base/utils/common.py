@@ -1,5 +1,7 @@
+from datetime import date, datetime
 from typing import Any, TypeVar
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+from zoneinfo import ZoneInfo
 
 from django.db import models
 from rest_framework.fields import IntegerField
@@ -14,7 +16,19 @@ __all__ = [
     'response_201',
     'transliterate',
     'deferred_decorator',
+    'moscow_now',
+    'moscow_today',
 ]
+
+MOSCOW_TZ = ZoneInfo('Europe/Moscow')
+
+
+def moscow_now() -> datetime:
+    return datetime.now(MOSCOW_TZ)
+
+
+def moscow_today() -> date:
+    return moscow_now().date()
 
 _Choices = TypeVar('_Choices', bound=models.Choices)
 

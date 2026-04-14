@@ -1,8 +1,9 @@
-from datetime import datetime, time
+from datetime import time
 
 from rest_framework import serializers
 
 from app.base.serializers.base import BaseModelSerializer, BaseSerializer
+from app.base.utils.common import moscow_now
 from app.employees.models import Employee
 from app.lessons.models import Lesson, WeekConfig
 
@@ -61,7 +62,7 @@ class GET_LessonsSerializer(BaseSerializer):
     WEEKDAYS = ['Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота']
 
     def to_representation(self, instance):
-        now = datetime.now()
+        now = moscow_now()
         current_weekday = now.weekday()  # 0=Mon … 5=Sat, 6=Sun
         current_time = now.time()
 
