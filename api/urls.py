@@ -10,6 +10,5 @@ urlpatterns += [
     path('api/', SpectacularSwaggerView.as_view(url_name='__docs__')),
     path('api/lessons/', include('app.lessons.urls')),
     path('api/employees/', include('app.employees.urls')),
-    path('api/students/', include('app.students.urls')),
     *static(settings.BASE_STATIC_URL, document_root=settings.STATIC_ROOT),
 ]
