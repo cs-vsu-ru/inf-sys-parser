@@ -43,7 +43,6 @@ INSTALLED_APPS = [
     'app.base',
     'app.employees',
     'app.lessons',
-    'app.students',
 ]
 
 REST_FRAMEWORK = {
