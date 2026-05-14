@@ -22,6 +22,7 @@ class EmployeeSynker:
             employee_data
             for employee_data in employees_data
             if employee_data['hasLessons'] is True
+            and employee_data.get('isActive', True) is True
         ]
 
     def synk(self) -> None:
@@ -31,8 +32,11 @@ class EmployeeSynker:
             name = self._parse_name(employee_data)
             self._update_or_create_employee(employee_data['id'], name)
 
-    def synk_by_id(self, id: int) -> Employee:
+    def synk_by_id(self, id: int) -> Employee | None:
         employee_data = self.requester.get(self.url + f'/{id}').json()
+        if employee_data.get('isActive', True) is not True:
+            self.employee_manager.filter(id=id).delete()
+            return None
         name = self._parse_name(employee_data)
         is_created, employee = self._update_or_create_employee(id, name)
         if is_created:
@@ -58,6 +62,4 @@ class EmployeeSynker:
         return f"{last_name} {first_name[0]}.{patronymic[0]}."
 
     def delete_lessons_by_id(self, id: int):
-        employee_to_delete = self.employee_manager.get(id=id)
-        self.lessons_manager.delete_for_employee(employee_to_delete)
-        employee_to_delete.delete()
+        self.employee_manager.filter(id=id).delete()

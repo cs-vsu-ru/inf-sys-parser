@@ -22,6 +22,9 @@ class LessonsByEmployeeView(BaseView):
             synker = EmployeeSynker()
             id = self.kwargs[self.lookup_url_kwarg]
             try:
-                return synker.synk_by_id(id)
+                employee = synker.synk_by_id(id)
             except KeyError as exc:
                 raise exc404 from exc
+            if employee is None:
+                raise exc404
+            return employee
